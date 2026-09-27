@@ -1,5 +1,6 @@
 import httpx
 from bs4 import BeautifulSoup
+from datetime import datetime, timezone
 
 from property_schema import Property
 
@@ -32,6 +33,10 @@ def scrape_page(url):
         )
 
     properties = []
+
+    scraped_at = datetime.now(
+        timezone.utc
+    ).isoformat()
 
     for article in property_articles:
         listing_link = article.find(
@@ -140,10 +145,14 @@ def scrape_page(url):
                     area_unit = area_parts[1].lower()
 
                     if area_unit == "marla":
-                        area_sqft = area_amount * 272.25
+                        area_sqft = (
+                            area_amount * 272.25
+                        )
 
                     elif area_unit == "kanal":
-                        area_sqft = area_amount * 5445
+                        area_sqft = (
+                            area_amount * 5445
+                        )
 
                 except ValueError:
                     area_sqft = None
@@ -160,7 +169,8 @@ def scrape_page(url):
             bathrooms=bathrooms,
             original_area=original_area,
             area_sqft=area_sqft,
-            url=property_url
+            url=property_url,
+            scraped_at=scraped_at
         )
 
         properties.append(property_data)
