@@ -151,7 +151,15 @@ def save_property(property_data, source_id):
                 """
                 SELECT
                     id,
+                    title,
+                    property_type,
                     price,
+                    location,
+                    bedrooms,
+                    bathrooms,
+                    original_area,
+                    area_sqft,
+                    url,
                     first_observed_at
                 FROM properties
                 WHERE source_id = %s
@@ -166,12 +174,26 @@ def save_property(property_data, source_id):
             existing_property = cursor.fetchone()
 
             price_status = "NEW"
+            changed_fields = []
 
             if existing_property:
 
                 property_id = existing_property[0]
-                previous_price = existing_property[1]
-                first_observed_at = existing_property[2]
+
+                previous_title = existing_property[1]
+                previous_property_type = existing_property[2]
+                previous_price = existing_property[3]
+                previous_location = existing_property[4]
+                previous_bedrooms = existing_property[5]
+                previous_bathrooms = existing_property[6]
+                previous_original_area = existing_property[7]
+                previous_area_sqft = existing_property[8]
+                previous_url = existing_property[9]
+                first_observed_at = existing_property[10]
+
+                # ------------------------------------------
+                # Detect price change
+                # ------------------------------------------
 
                 if (
                     previous_price is not None
@@ -188,7 +210,59 @@ def save_property(property_data, source_id):
                         price_status = "UNCHANGED"
 
                 elif property_data.price is None:
+
                     price_status = "PRICE UNAVAILABLE"
+
+                # ------------------------------------------
+                # Detect other property changes
+                # ------------------------------------------
+
+                if property_data.title != previous_title:
+                    changed_fields.append("title")
+
+                if (
+                    property_data.property_type
+                    != previous_property_type
+                ):
+                    changed_fields.append("property_type")
+
+                if property_data.location != previous_location:
+                    changed_fields.append("location")
+
+                if property_data.bedrooms != previous_bedrooms:
+                    changed_fields.append("bedrooms")
+
+                if property_data.bathrooms != previous_bathrooms:
+                    changed_fields.append("bathrooms")
+
+                if (
+                    property_data.original_area
+                    != previous_original_area
+                ):
+                    changed_fields.append("original_area")
+
+                # ------------------------------------------
+                # Detect area change
+                #
+                # Ignore tiny floating-point differences.
+                # ------------------------------------------
+
+                if (
+                    property_data.area_sqft is not None
+                    and previous_area_sqft is not None
+                    and abs(
+                        property_data.area_sqft
+                        - float(previous_area_sqft)
+                    ) > 0.01
+                ):
+                    changed_fields.append("area_sqft")
+
+                if property_data.url != previous_url:
+                    changed_fields.append("url")
+
+                # ------------------------------------------
+                # Update current property state
+                # ------------------------------------------
 
                 cursor.execute(
                     """
@@ -230,6 +304,10 @@ def save_property(property_data, source_id):
                 action = "updated"
 
             else:
+
+                # ------------------------------------------
+                # Create new property
+                # ------------------------------------------
 
                 cursor.execute(
                     """
@@ -289,6 +367,10 @@ def save_property(property_data, source_id):
 
                 action = "created"
 
+            # ----------------------------------------------
+            # Save observation
+            # ----------------------------------------------
+
             cursor.execute(
                 """
                 INSERT INTO property_observations (
@@ -338,7 +420,8 @@ def save_property(property_data, source_id):
         return {
             "action": action,
             "property_id": property_id,
-            "price_status": price_status
+            "price_status": price_status,
+            "changed_fields": changed_fields
         }
 
     except Exception:

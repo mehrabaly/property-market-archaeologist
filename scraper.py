@@ -165,6 +165,8 @@ price_decreases = 0
 unchanged_properties = 0
 price_unavailable = 0
 
+property_changes = 0
+
 
 for property_data in all_properties:
 
@@ -231,6 +233,26 @@ for property_data in all_properties:
         print(
             f"NEW PROPERTY | "
             f"{property_data.listing_id}"
+        )
+
+
+    # ----------------------------------------------
+    # Other property changes
+    # ----------------------------------------------
+
+    changed_fields = result[
+        "changed_fields"
+    ]
+
+
+    if changed_fields:
+
+        property_changes += 1
+
+        print(
+            f"PROPERTY CHANGED | "
+            f"{property_data.listing_id} | "
+            f"{', '.join(changed_fields)}"
         )
 
 
@@ -347,6 +369,11 @@ print(
 print(
     f"Price unavailable: "
     f"{price_unavailable}"
+)
+
+print(
+    f"Properties with other changes: "
+    f"{property_changes}"
 )
 
 print(
