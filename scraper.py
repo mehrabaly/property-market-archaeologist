@@ -167,13 +167,38 @@ price_unavailable = 0
 
 property_changes = 0
 
+save_failed = False
+
 
 for property_data in all_properties:
 
-    result = save_property(
-        property_data,
-        SOURCE_ID
-    )
+    try:
+
+        result = save_property(
+            property_data,
+            SOURCE_ID
+        )
+
+    except Exception as error:
+
+        save_failed = True
+
+        error_message = (
+            f"Property "
+            f"{property_data.listing_id}: "
+            f"{str(error)}"
+        )
+
+        errors.append(
+            error_message
+        )
+
+        print(
+            f"ERROR SAVING PROPERTY: "
+            f"{error_message}"
+        )
+
+        continue
 
 
     # ----------------------------------------------
@@ -267,7 +292,11 @@ scrape_finished_at = (
 )
 
 
-if scrape_successful:
+if save_failed:
+
+    run_status = "failed"
+
+elif scrape_successful:
 
     run_status = "success"
 
