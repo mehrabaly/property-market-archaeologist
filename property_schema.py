@@ -21,6 +21,9 @@ class Property:
     original_area: str
     area_sqft: Optional[float]
 
+    description: str
+    source_listed_at: Optional[str]
+
     url: str
 
     scraped_at: Optional[str] = None
