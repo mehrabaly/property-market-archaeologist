@@ -84,12 +84,29 @@ def parse_area(area_text):
 
 
 def scrape_page(url):
-    response = httpx.get(
-        url,
-        timeout=20
-    )
+    max_attempts = 3
 
-    response.raise_for_status()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = httpx.get(
+                url,
+                timeout=20
+            )
+            response.raise_for_status()
+            break
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.HTTPStatusError
+        ) as error:
+            if attempt == max_attempts:
+                raise
+            print(
+                f"REQUEST FAILED "
+                f"(attempt {attempt}/{max_attempts}): "
+                f"{error}"
+            )
+
 
     soup = BeautifulSoup(
         response.text,
