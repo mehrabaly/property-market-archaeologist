@@ -134,7 +134,7 @@ def scrape_page(url):
     if len(property_articles) == 0:
 
         raise ValueError(
-            "No property listings found on page."
+            f"No property listings found on page: {url}"
         )
 
     properties = []
@@ -350,3 +350,4 @@ def scrape_page(url):
         )
 
     return unique_properties
+
