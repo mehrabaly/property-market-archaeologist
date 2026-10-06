@@ -198,6 +198,9 @@ def scrape_page(url):
 
         listing_id = url_parts[-3]
 
+        if not listing_id.isdigit():
+            continue
+
 
         # ------------------------------------------
         # Price
@@ -263,36 +266,25 @@ def scrape_page(url):
 
 
         # ------------------------------------------
-        # Bedrooms
+        # Bedrooms, Bathrooms and Area
         # ------------------------------------------
 
-        bedrooms = (
-            features[0]
-            if len(features) > 0
-            else "Not found"
-        )
+        bedrooms = "Not found"
+        bathrooms = "Not found"
+        original_area = "Not found"
 
+        for feature in features:
+            if any(
+                unit in feature.lower()
+                for unit in ("marla", "kanal")
+            ):
+                original_area = feature
 
-        # ------------------------------------------
-        # Bathrooms
-        # ------------------------------------------
+            elif bedrooms == "Not found":
+                bedrooms = feature
 
-        bathrooms = (
-            features[1]
-            if len(features) > 1
-            else "Not found"
-        )
-
-
-        # ------------------------------------------
-        # Area
-        # ------------------------------------------
-
-        original_area = (
-            features[2]
-            if len(features) > 2
-            else "Not found"
-        )
+            elif bathrooms == "Not found":
+                bathrooms = feature
 
         area_sqft = parse_area(
             original_area
