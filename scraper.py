@@ -12,7 +12,6 @@ from database import (
     get_connection,
     save_properties_page,
     start_scrape_run,
-    update_scrape_progress,
     finish_scrape_run
 )
 
@@ -20,22 +19,18 @@ from database import (
 SOURCE_ID = 1
 
 # --------------------------------------------------
-# Test settings
+# Scrape range
+#
+# Keep this at 5 while testing.
+#
+# Later, change MAX_PAGES to None to scrape all
+# remaining pages until the end of the website.
 # --------------------------------------------------
 
-# Maximum number of pages to process in one execution.
-#
-# Keep this at 5 for now.
-# We will remove this later.
 MAX_PAGES = 5
 
-# Delay between pages.
 PAGE_DELAY_SECONDS = 3
 
-
-# --------------------------------------------------
-# Find an unfinished scrape run
-# --------------------------------------------------
 
 def get_latest_incomplete_run(source_id):
 
@@ -70,9 +65,39 @@ def get_latest_incomplete_run(source_id):
         connection.close()
 
 
-# --------------------------------------------------
-# Start
-# --------------------------------------------------
+def get_seen_listing_ids(
+    scrape_run_id
+):
+
+    connection = get_connection()
+
+    try:
+
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT DISTINCT
+                    p.listing_id
+                FROM property_observations po
+                JOIN properties p
+                    ON p.id = po.property_id
+                WHERE po.scrape_run_id = %s
+                """,
+                (scrape_run_id,)
+            )
+
+            rows = cursor.fetchall()
+
+            return {
+                row[0]
+                for row in rows
+            }
+
+    finally:
+
+        connection.close()
+
 
 print()
 print(
@@ -119,7 +144,7 @@ print(
 
 
 # --------------------------------------------------
-# Check for unfinished crawl
+# Check for an unfinished scrape
 # --------------------------------------------------
 
 incomplete_run = get_latest_incomplete_run(
@@ -172,10 +197,6 @@ if incomplete_run:
 
 else:
 
-    # --------------------------------------------------
-    # Start a completely new crawl
-    # --------------------------------------------------
-
     start_page = 1
 
     scrape_started_at = datetime.now(
@@ -211,14 +232,49 @@ else:
 
 
 # --------------------------------------------------
-# Determine test range
+# Load listings already processed in this run.
+#
+# This prevents duplicate observations when a
+# scrape resumes after an interruption.
 # --------------------------------------------------
 
-end_page = min(
-    start_page + MAX_PAGES - 1,
-    total_pages
+seen_listing_ids = get_seen_listing_ids(
+    scrape_run_id
 )
 
+print()
+
+print(
+    f"LISTINGS ALREADY RECORDED "
+    f"IN THIS RUN: {len(seen_listing_ids)}"
+)
+
+
+# --------------------------------------------------
+# Determine the end page
+#
+# If MAX_PAGES is 5:
+#     scrape at most 5 pages.
+#
+# If MAX_PAGES is None:
+#     scrape all remaining pages.
+# --------------------------------------------------
+
+if MAX_PAGES is None:
+
+    end_page = total_pages
+
+else:
+
+    end_page = min(
+        start_page + MAX_PAGES - 1,
+        total_pages
+    )
+
+
+# --------------------------------------------------
+# Check whether the entire crawl is already done
+# --------------------------------------------------
 
 if start_page > total_pages:
 
@@ -259,7 +315,7 @@ pages_to_scrape = (
 
 print()
 print(
-    f"TEST RANGE: "
+    f"SCRAPE RANGE: "
     f"PAGE {start_page} TO PAGE {end_page}"
 )
 
@@ -288,11 +344,13 @@ price_unavailable = 0
 
 property_changes = 0
 
+duplicates_skipped = 0
+
 errors = []
 
 
 # --------------------------------------------------
-# Scrape pages one by one
+# Scrape pages
 # --------------------------------------------------
 
 for page_number in range(
@@ -337,14 +395,84 @@ for page_number in range(
 
 
         # ------------------------------------------
-        # Save entire page in one transaction
+        # Remove duplicates
+        #
+        # There are two possible duplicate cases:
+        #
+        # 1. Listing was already recorded earlier
+        #    in this scrape run.
+        #
+        # 2. Same listing appears more than once
+        #    on the current page.
+        # ------------------------------------------
+
+        unique_page_properties = []
+
+        page_seen_listing_ids = set()
+
+        for property_data in page_properties:
+
+            listing_id = property_data.listing_id
+
+            if (
+                listing_id in seen_listing_ids
+                or listing_id in page_seen_listing_ids
+            ):
+
+                duplicates_skipped += 1
+
+                print(
+                    f"DUPLICATE SKIPPED | "
+                    f"{listing_id}"
+                )
+
+                continue
+
+            page_seen_listing_ids.add(
+                listing_id
+            )
+
+            unique_page_properties.append(
+                property_data
+            )
+
+
+        print(
+            f"UNIQUE PROPERTIES ON PAGE {page_number}: "
+            f"{len(unique_page_properties)}"
+        )
+
+
+        if len(unique_page_properties) != len(
+            page_properties
+        ):
+
+            skipped_on_page = (
+                len(page_properties)
+                - len(unique_page_properties)
+            )
+
+            print(
+                f"DUPLICATES SKIPPED ON PAGE "
+                f"{page_number}: "
+                f"{skipped_on_page}"
+            )
+
+
+        # ------------------------------------------
+        # Save entire page atomically
+        #
+        # Properties, observations and checkpoint
+        # are committed together.
         # ------------------------------------------
 
         try:
 
             results = save_properties_page(
-                page_properties,
-                SOURCE_ID
+                unique_page_properties,
+                SOURCE_ID,
+                scrape_run_id,
+                page_number
             )
 
         except Exception as error:
@@ -386,20 +514,27 @@ for page_number in range(
 
 
         # ------------------------------------------
-        # Process committed results
+        # Only remember listing IDs AFTER the
+        # entire page transaction successfully
+        # committed.
+        # ------------------------------------------
+
+        seen_listing_ids.update(
+            page_seen_listing_ids
+        )
+
+
+        # ------------------------------------------
+        # Process database results
         # ------------------------------------------
 
         for property_data, result in zip(
-            page_properties,
+            unique_page_properties,
             results
         ):
 
             properties_found += 1
 
-
-            # --------------------------------------
-            # Property action
-            # --------------------------------------
 
             if result["action"] == "created":
 
@@ -455,7 +590,7 @@ for page_number in range(
 
 
             # --------------------------------------
-            # Other changes
+            # Other property changes
             # --------------------------------------
 
             changed_fields = result[
@@ -474,16 +609,7 @@ for page_number in range(
                 )
 
 
-        # ------------------------------------------
-        # Page completed successfully
-        # ------------------------------------------
-
         pages_successful += 1
-
-        update_scrape_progress(
-            scrape_run_id,
-            page_number
-        )
 
         print()
         print(
@@ -518,9 +644,9 @@ for page_number in range(
         break
 
 
-    # --------------------------------------------------
-    # Delay before next page
-    # --------------------------------------------------
+    # ----------------------------------------------
+    # Delay between pages
+    # ----------------------------------------------
 
     if page_number < end_page:
 
@@ -536,7 +662,7 @@ for page_number in range(
 
 
 # --------------------------------------------------
-# Determine run status
+# Finish scrape
 # --------------------------------------------------
 
 scrape_finished_at = datetime.now(
@@ -558,7 +684,7 @@ else:
 
 
 # --------------------------------------------------
-# Determine actual last completed page
+# Determine last completed page
 # --------------------------------------------------
 
 if pages_successful > 0:
@@ -583,7 +709,7 @@ else:
 
 
 # --------------------------------------------------
-# Finish scrape run
+# Update scrape run
 # --------------------------------------------------
 
 finish_scrape_run(
@@ -604,7 +730,7 @@ finish_scrape_run(
 
 
 # --------------------------------------------------
-# Final output
+# Final summary
 # --------------------------------------------------
 
 print()
@@ -688,6 +814,11 @@ print(
 print(
     f"Properties with other changes: "
     f"{property_changes}"
+)
+
+print(
+    f"Duplicates skipped: "
+    f"{duplicates_skipped}"
 )
 
 print(

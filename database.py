@@ -18,9 +18,7 @@ def get_sources():
     connection = get_connection()
 
     try:
-
         with connection.cursor() as cursor:
-
             cursor.execute(
                 """
                 SELECT
@@ -35,7 +33,6 @@ def get_sources():
             return cursor.fetchall()
 
     finally:
-
         connection.close()
 
 
@@ -51,9 +48,7 @@ def start_scrape_run(
     connection = get_connection()
 
     try:
-
         with connection.cursor() as cursor:
-
             cursor.execute(
                 """
                 INSERT INTO scrape_runs (
@@ -88,13 +83,10 @@ def start_scrape_run(
         return scrape_run_id
 
     except Exception:
-
         connection.rollback()
-
         raise
 
     finally:
-
         connection.close()
 
 
@@ -105,9 +97,7 @@ def update_scrape_progress(
     connection = get_connection()
 
     try:
-
         with connection.cursor() as cursor:
-
             cursor.execute(
                 """
                 UPDATE scrape_runs
@@ -124,13 +114,10 @@ def update_scrape_progress(
         connection.commit()
 
     except Exception:
-
         connection.rollback()
-
         raise
 
     finally:
-
         connection.close()
 
 
@@ -152,9 +139,7 @@ def finish_scrape_run(
     connection = get_connection()
 
     try:
-
         with connection.cursor() as cursor:
-
             cursor.execute(
                 """
                 UPDATE scrape_runs
@@ -193,13 +178,10 @@ def finish_scrape_run(
         connection.commit()
 
     except Exception:
-
         connection.rollback()
-
         raise
 
     finally:
-
         connection.close()
 
 
@@ -210,7 +192,9 @@ def finish_scrape_run(
 def save_property_with_connection(
     connection,
     property_data,
-    source_id
+    source_id,
+    scrape_run_id=None,
+    page_number=None
 ):
     with connection.cursor() as cursor:
 
@@ -249,7 +233,6 @@ def save_property_with_connection(
         price_status = "NEW"
         changed_fields = []
 
-
         # ------------------------------------------
         # Existing property
         # ------------------------------------------
@@ -271,7 +254,6 @@ def save_property_with_connection(
             previous_url = existing_property[11]
             first_observed_at = existing_property[12]
 
-
             # --------------------------------------
             # Price comparison
             # --------------------------------------
@@ -282,85 +264,38 @@ def save_property_with_connection(
             ):
 
                 if property_data.price < previous_price:
-
                     price_status = "PRICE DOWN"
 
                 elif property_data.price > previous_price:
-
                     price_status = "PRICE UP"
 
                 else:
-
                     price_status = "UNCHANGED"
 
             elif property_data.price is None:
-
                 price_status = "PRICE UNAVAILABLE"
-
 
             # --------------------------------------
             # Other field comparisons
             # --------------------------------------
 
-            if (
-                property_data.title
-                != previous_title
-            ):
+            if property_data.title != previous_title:
+                changed_fields.append("title")
 
-                changed_fields.append(
-                    "title"
-                )
+            if property_data.property_type != previous_property_type:
+                changed_fields.append("property_type")
 
+            if property_data.location != previous_location:
+                changed_fields.append("location")
 
-            if (
-                property_data.property_type
-                != previous_property_type
-            ):
+            if property_data.bedrooms != previous_bedrooms:
+                changed_fields.append("bedrooms")
 
-                changed_fields.append(
-                    "property_type"
-                )
+            if property_data.bathrooms != previous_bathrooms:
+                changed_fields.append("bathrooms")
 
-
-            if (
-                property_data.location
-                != previous_location
-            ):
-
-                changed_fields.append(
-                    "location"
-                )
-
-
-            if (
-                property_data.bedrooms
-                != previous_bedrooms
-            ):
-
-                changed_fields.append(
-                    "bedrooms"
-                )
-
-
-            if (
-                property_data.bathrooms
-                != previous_bathrooms
-            ):
-
-                changed_fields.append(
-                    "bathrooms"
-                )
-
-
-            if (
-                property_data.original_area
-                != previous_original_area
-            ):
-
-                changed_fields.append(
-                    "original_area"
-                )
-
+            if property_data.original_area != previous_original_area:
+                changed_fields.append("original_area")
 
             # --------------------------------------
             # Area comparison
@@ -374,25 +309,14 @@ def save_property_with_connection(
                     - float(previous_area_sqft)
                 ) > 0.01
             ):
-
-                changed_fields.append(
-                    "area_sqft"
-                )
-
+                changed_fields.append("area_sqft")
 
             # --------------------------------------
             # Description comparison
             # --------------------------------------
 
-            if (
-                property_data.description
-                != previous_description
-            ):
-
-                changed_fields.append(
-                    "description"
-                )
-
+            if property_data.description != previous_description:
+                changed_fields.append("description")
 
             # --------------------------------------
             # Source listed date comparison
@@ -402,25 +326,14 @@ def save_property_with_connection(
                 property_data.source_listed_at
                 != previous_source_listed_at
             ):
-
-                changed_fields.append(
-                    "source_listed_at"
-                )
-
+                changed_fields.append("source_listed_at")
 
             # --------------------------------------
             # URL comparison
             # --------------------------------------
 
-            if (
-                property_data.url
-                != previous_url
-            ):
-
-                changed_fields.append(
-                    "url"
-                )
-
+            if property_data.url != previous_url:
+                changed_fields.append("url")
 
             # --------------------------------------
             # Update property
@@ -470,7 +383,6 @@ def save_property_with_connection(
             )
 
             action = "updated"
-
 
         # ------------------------------------------
         # New property
@@ -542,7 +454,6 @@ def save_property_with_connection(
 
             action = "created"
 
-
         # ------------------------------------------
         # Save observation
         # ------------------------------------------
@@ -562,9 +473,13 @@ def save_property_with_connection(
                 description,
                 source_listed_at,
                 url,
-                observed_at
+                observed_at,
+                scrape_run_id,
+                page_number
             )
             VALUES (
+                %s,
+                %s,
                 %s,
                 %s,
                 %s,
@@ -593,10 +508,11 @@ def save_property_with_connection(
                 property_data.description,
                 property_data.source_listed_at,
                 property_data.url,
-                property_data.scraped_at
+                property_data.scraped_at,
+                scrape_run_id,
+                page_number
             )
         )
-
 
         return {
             "action": action,
@@ -645,7 +561,9 @@ def save_property(
 
 def save_properties_page(
     page_properties,
-    source_id
+    source_id,
+    scrape_run_id=None,
+    page_number=None
 ):
     connection = get_connection()
 
@@ -662,36 +580,63 @@ def save_properties_page(
             result = save_property_with_connection(
                 connection,
                 property_data,
-                source_id
+                source_id,
+                scrape_run_id,
+                page_number
             )
 
-            results.append(
-                result
-            )
-
+            results.append(result)
 
         # ------------------------------------------
-        # Everything succeeded
+        # Checkpoint the page inside the SAME
+        # transaction as the property observations.
+        # ------------------------------------------
+
+        if (
+            scrape_run_id is not None
+            and page_number is not None
+        ):
+
+            with connection.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    UPDATE scrape_runs
+                    SET
+                        last_completed_page = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        page_number,
+                        scrape_run_id
+                    )
+                )
+
+        # ------------------------------------------
+        # Everything succeeded.
+        #
+        # Property data + observations +
+        # checkpoint are committed together.
         # ------------------------------------------
 
         connection.commit()
 
         return results
 
-
     except Exception:
 
         # ------------------------------------------
         # Something failed.
         #
-        # Roll back EVERY property on this page.
+        # Roll back EVERY property, observation,
+        # and checkpoint change from this page.
         # ------------------------------------------
 
         connection.rollback()
 
         raise
 
-
     finally:
 
         connection.close()
+        
