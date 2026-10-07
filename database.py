@@ -588,8 +588,17 @@ def save_properties_page(
             results.append(result)
 
         # ------------------------------------------
-        # Checkpoint the page inside the SAME
-        # transaction as the property observations.
+        # Checkpoint page AND update cumulative
+        # statistics inside the SAME transaction.
+        #
+        # This means a completed page always has:
+        #
+        # - its properties
+        # - its observations
+        # - its checkpoint
+        # - its statistics
+        #
+        # committed together.
         # ------------------------------------------
 
         if (
@@ -597,17 +606,53 @@ def save_properties_page(
             and page_number is not None
         ):
 
+            new_count = sum(
+                1
+                for result in results
+                if result["action"] == "created"
+            )
+
+            price_up_count = sum(
+                1
+                for result in results
+                if result["price_status"] == "PRICE UP"
+            )
+
+            price_down_count = sum(
+                1
+                for result in results
+                if result["price_status"] == "PRICE DOWN"
+            )
+
+            unchanged_count = sum(
+                1
+                for result in results
+                if result["price_status"] == "UNCHANGED"
+            )
+
             with connection.cursor() as cursor:
 
                 cursor.execute(
                     """
                     UPDATE scrape_runs
                     SET
-                        last_completed_page = %s
+                        last_completed_page = %s,
+                        pages_attempted = pages_attempted + 1,
+                        pages_successful = pages_successful + 1,
+                        properties_found = properties_found + %s,
+                        new_properties = new_properties + %s,
+                        price_increases = price_increases + %s,
+                        price_decreases = price_decreases + %s,
+                        unchanged_properties = unchanged_properties + %s
                     WHERE id = %s
                     """,
                     (
                         page_number,
+                        len(results),
+                        new_count,
+                        price_up_count,
+                        price_down_count,
+                        unchanged_count,
                         scrape_run_id
                     )
                 )
@@ -616,7 +661,8 @@ def save_properties_page(
         # Everything succeeded.
         #
         # Property data + observations +
-        # checkpoint are committed together.
+        # statistics + checkpoint are committed
+        # together.
         # ------------------------------------------
 
         connection.commit()
@@ -629,7 +675,8 @@ def save_properties_page(
         # Something failed.
         #
         # Roll back EVERY property, observation,
-        # and checkpoint change from this page.
+        # statistic and checkpoint change from
+        # this page.
         # ------------------------------------------
 
         connection.rollback()
@@ -639,4 +686,3 @@ def save_properties_page(
     finally:
 
         connection.close()
-        

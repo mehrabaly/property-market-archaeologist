@@ -46,7 +46,16 @@ def get_latest_incomplete_run(source_id):
                     id,
                     total_pages,
                     last_completed_page,
-                    status
+                    status,
+                    pages_attempted,
+                    pages_successful,
+                    pages_failed,
+                    properties_found,
+                    new_properties,
+                    price_increases,
+                    price_decreases,
+                    unchanged_properties,
+                    no_longer_detected
                 FROM scrape_runs
                 WHERE source_id = %s
                   AND status IN ('running', 'partial')
@@ -164,6 +173,24 @@ if incomplete_run:
         last_completed_page + 1
     )
 
+    # ----------------------------------------------
+    # Load statistics already checkpointed for this
+    # run.
+    # ----------------------------------------------
+
+    previous_pages_attempted = incomplete_run[4]
+    previous_pages_successful = incomplete_run[5]
+    previous_pages_failed = incomplete_run[6]
+
+    previous_properties_found = incomplete_run[7]
+    previous_created_count = incomplete_run[8]
+
+    previous_price_increases = incomplete_run[9]
+    previous_price_decreases = incomplete_run[10]
+
+    previous_unchanged_properties = incomplete_run[11]
+    previous_no_longer_detected = incomplete_run[12]
+
     print()
     print(
         "=========================================="
@@ -194,6 +221,51 @@ if incomplete_run:
         f"RESUMING FROM PAGE: {start_page}"
     )
 
+    print()
+    print(
+        "CHECKPOINTED RUN STATISTICS:"
+    )
+
+    print(
+        f"Pages attempted: "
+        f"{previous_pages_attempted}"
+    )
+
+    print(
+        f"Pages successful: "
+        f"{previous_pages_successful}"
+    )
+
+    print(
+        f"Pages failed: "
+        f"{previous_pages_failed}"
+    )
+
+    print(
+        f"Properties processed: "
+        f"{previous_properties_found}"
+    )
+
+    print(
+        f"New properties: "
+        f"{previous_created_count}"
+    )
+
+    print(
+        f"Price increases: "
+        f"{previous_price_increases}"
+    )
+
+    print(
+        f"Price decreases: "
+        f"{previous_price_decreases}"
+    )
+
+    print(
+        f"Unchanged prices: "
+        f"{previous_unchanged_properties}"
+    )
+
 
 else:
 
@@ -208,6 +280,23 @@ else:
         scrape_started_at,
         total_pages
     )
+
+    # ----------------------------------------------
+    # New run starts with zero counters.
+    # ----------------------------------------------
+
+    previous_pages_attempted = 0
+    previous_pages_successful = 0
+    previous_pages_failed = 0
+
+    previous_properties_found = 0
+    previous_created_count = 0
+
+    previous_price_increases = 0
+    previous_price_decreases = 0
+
+    previous_unchanged_properties = 0
+    previous_no_longer_detected = 0
 
     print()
     print(
@@ -327,19 +416,23 @@ print(
 
 # --------------------------------------------------
 # Counters
+#
+# These begin with the statistics already stored
+# in the database when a run is resumed.
 # --------------------------------------------------
 
-pages_attempted = 0
-pages_successful = 0
-pages_failed = 0
+pages_attempted = previous_pages_attempted
+pages_successful = previous_pages_successful
+pages_failed = previous_pages_failed
 
-properties_found = 0
-created_count = 0
+properties_found = previous_properties_found
+created_count = previous_created_count
 updated_count = 0
 
-price_increases = 0
-price_decreases = 0
-unchanged_properties = 0
+price_increases = previous_price_increases
+price_decreases = previous_price_decreases
+unchanged_properties = previous_unchanged_properties
+
 price_unavailable = 0
 
 property_changes = 0
@@ -361,8 +454,6 @@ for page_number in range(
     url = build_page_url(
         page_number
     )
-
-    pages_attempted += 1
 
     print()
     print(
@@ -396,14 +487,6 @@ for page_number in range(
 
         # ------------------------------------------
         # Remove duplicates
-        #
-        # There are two possible duplicate cases:
-        #
-        # 1. Listing was already recorded earlier
-        #    in this scrape run.
-        #
-        # 2. Same listing appears more than once
-        #    on the current page.
         # ------------------------------------------
 
         unique_page_properties = []
@@ -460,10 +543,10 @@ for page_number in range(
 
 
         # ------------------------------------------
-        # Save entire page atomically
+        # Save entire page atomically.
         #
-        # Properties, observations and checkpoint
-        # are committed together.
+        # The database function now also checkpoints
+        # the cumulative scrape statistics.
         # ------------------------------------------
 
         try:
@@ -526,6 +609,9 @@ for page_number in range(
 
         # ------------------------------------------
         # Process database results
+        #
+        # The cumulative database counters were
+        # already checkpointed atomically.
         # ------------------------------------------
 
         for property_data, result in zip(
@@ -533,12 +619,7 @@ for page_number in range(
             results
         ):
 
-            properties_found += 1
-
-
             if result["action"] == "created":
-
-                created_count += 1
 
                 print(
                     f"NEW PROPERTY | "
@@ -547,7 +628,7 @@ for page_number in range(
 
             elif result["action"] == "updated":
 
-                updated_count += 1
+                pass
 
 
             # --------------------------------------
@@ -561,8 +642,6 @@ for page_number in range(
 
             if price_status == "PRICE UP":
 
-                price_increases += 1
-
                 print(
                     f"PRICE UP | "
                     f"{property_data.listing_id}"
@@ -571,22 +650,10 @@ for page_number in range(
 
             elif price_status == "PRICE DOWN":
 
-                price_decreases += 1
-
                 print(
                     f"PRICE DOWN | "
                     f"{property_data.listing_id}"
                 )
-
-
-            elif price_status == "UNCHANGED":
-
-                unchanged_properties += 1
-
-
-            elif price_status == "PRICE UNAVAILABLE":
-
-                price_unavailable += 1
 
 
             # --------------------------------------
@@ -600,8 +667,6 @@ for page_number in range(
 
             if changed_fields:
 
-                property_changes += 1
-
                 print(
                     f"PROPERTY CHANGED | "
                     f"{property_data.listing_id} | "
@@ -609,7 +674,93 @@ for page_number in range(
                 )
 
 
+        # ------------------------------------------
+        # Update local counters from this page.
+        #
+        # These are used for the final finish call.
+        # The database already checkpointed the
+        # cumulative values atomically.
+        # ------------------------------------------
+
+        page_created_count = sum(
+            1
+            for result in results
+            if result["action"] == "created"
+        )
+
+        page_updated_count = sum(
+            1
+            for result in results
+            if result["action"] == "updated"
+        )
+
+        page_price_up_count = sum(
+            1
+            for result in results
+            if result["price_status"] == "PRICE UP"
+        )
+
+        page_price_down_count = sum(
+            1
+            for result in results
+            if result["price_status"] == "PRICE DOWN"
+        )
+
+        page_unchanged_count = sum(
+            1
+            for result in results
+            if result["price_status"] == "UNCHANGED"
+        )
+
+        page_price_unavailable_count = sum(
+            1
+            for result in results
+            if result["price_status"]
+            == "PRICE UNAVAILABLE"
+        )
+
+        page_property_change_count = sum(
+            1
+            for result in results
+            if result["changed_fields"]
+        )
+
+
+        pages_attempted += 1
         pages_successful += 1
+
+        properties_found += len(
+            results
+        )
+
+        created_count += (
+            page_created_count
+        )
+
+        updated_count += (
+            page_updated_count
+        )
+
+        price_increases += (
+            page_price_up_count
+        )
+
+        price_decreases += (
+            page_price_down_count
+        )
+
+        unchanged_properties += (
+            page_unchanged_count
+        )
+
+        price_unavailable += (
+            page_price_unavailable_count
+        )
+
+        property_changes += (
+            page_property_change_count
+        )
+
 
         print()
         print(
@@ -685,27 +836,21 @@ else:
 
 # --------------------------------------------------
 # Determine last completed page
+#
+# The database checkpoint is authoritative.
 # --------------------------------------------------
 
-if pages_successful > 0:
+latest_run = get_latest_incomplete_run(
+    SOURCE_ID
+)
 
-    last_completed_page = (
-        start_page + pages_successful - 1
-    )
+if latest_run and latest_run[0] == scrape_run_id:
+
+    last_completed_page = latest_run[2]
 
 else:
 
-    incomplete_run = get_latest_incomplete_run(
-        SOURCE_ID
-    )
-
-    if incomplete_run:
-
-        last_completed_page = incomplete_run[2]
-
-    else:
-
-        last_completed_page = 0
+    last_completed_page = end_page
 
 
 # --------------------------------------------------
@@ -723,7 +868,7 @@ finish_scrape_run(
     price_increases=price_increases,
     price_decreases=price_decreases,
     unchanged_properties=unchanged_properties,
-    no_longer_detected=0,
+    no_longer_detected=previous_no_longer_detected,
     status=run_status,
     errors=json.dumps(errors)
 )
