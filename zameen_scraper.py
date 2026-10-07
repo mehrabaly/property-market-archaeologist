@@ -83,30 +83,92 @@ def parse_area(area_text):
     return None
 
 
-def scrape_page(url):
+def get_page(url):
     max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
+
         try:
             response = httpx.get(
                 url,
                 timeout=20
             )
+
             response.raise_for_status()
-            break
+
+            return response
+
         except (
             httpx.TimeoutException,
             httpx.NetworkError,
             httpx.HTTPStatusError
         ) as error:
+
             if attempt == max_attempts:
                 raise
+
             print(
                 f"REQUEST FAILED "
                 f"(attempt {attempt}/{max_attempts}): "
                 f"{error}"
             )
 
+    raise RuntimeError(
+        f"Could not retrieve page: {url}"
+    )
+
+
+def build_page_url(page_number):
+    return (
+        f"{BASE_URL}/Houses_Property/"
+        f"Lahore-1-{page_number}.html"
+    )
+
+
+def get_total_pages(url):
+    response = get_page(url)
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
+
+    page_text = soup.get_text(
+        " ",
+        strip=True
+    )
+
+    match = re.search(
+        r"1\s+to\s+\d+\s+of\s+([\d,]+)\s+Houses",
+        page_text,
+        re.IGNORECASE
+    )
+
+    if not match:
+
+        raise ValueError(
+            "Could not determine total property count "
+            f"from page: {url}"
+        )
+
+    total_properties = int(
+        match.group(1).replace(",", "")
+    )
+
+    properties_per_page = 25
+
+    total_pages = (
+        total_properties
+        + properties_per_page
+        - 1
+    ) // properties_per_page
+
+    return total_properties, total_pages
+
+
+def scrape_page(url):
+
+    response = get_page(url)
 
     soup = BeautifulSoup(
         response.text,
@@ -127,6 +189,7 @@ def scrape_page(url):
         )
 
         if listing_link:
+
             property_articles.append(
                 article
             )
@@ -152,6 +215,7 @@ def scrape_page(url):
 
         if not listing_link:
             continue
+
 
         # ------------------------------------------
         # Title
@@ -274,16 +338,20 @@ def scrape_page(url):
         original_area = "Not found"
 
         for feature in features:
+
             if any(
                 unit in feature.lower()
                 for unit in ("marla", "kanal")
             ):
+
                 original_area = feature
 
             elif bedrooms == "Not found":
+
                 bedrooms = feature
 
             elif bathrooms == "Not found":
+
                 bathrooms = feature
 
         area_sqft = parse_area(
@@ -307,6 +375,8 @@ def scrape_page(url):
             bathrooms=bathrooms,
             original_area=original_area,
             area_sqft=area_sqft,
+            description="",
+            source_listed_at=None,
             url=property_url,
             scraped_at=scraped_at
         )
@@ -342,4 +412,3 @@ def scrape_page(url):
         )
 
     return unique_properties
-
